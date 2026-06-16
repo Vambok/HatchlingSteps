@@ -1,0 +1,18 @@
+{
+    "$schema": "https://raw.githubusercontent.com/ow-mods/owml/master/schemas/config_schema.json",
+    "enabled": true,
+    "settings": {
+        "Skill": {
+            "type": "selector",
+            "value": "Hatchling",
+            "options": [
+                "Rock",
+                "Clumsy",
+                "Hatchling",
+                "Fast learner",
+                "Prodigy"
+            ]
+        },
+        "Unlearn": false
+    }
+}
