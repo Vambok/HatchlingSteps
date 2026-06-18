@@ -14,6 +14,8 @@ namespace HatchlingSteps {
         int[] skillLevel = new int[12];
         int increment = 2;
         Vector2 messVector = new(1, 1);
+        Vector2 autoWalk = new(0, 0);
+        public bool forced = false;
 
         public void Awake() {
             Instance = this;
@@ -54,14 +56,19 @@ namespace HatchlingSteps {
 
             ShipLogFactSave saveData = PlayerData.GetShipLogFactSave("HatchlingSteps_currentSkill");
             if(saveData != null) skillLevel = System.Array.ConvertAll(saveData.id.Split(','), int.Parse);
-            playerController = Locator.GetPlayerController();
-            probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
-
+            ModHelper.Events.Unity.FireInNUpdates(() => {
+                playerController = Locator.GetPlayerController();
+                probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
+            }, 30);
             ModHelper.Console.WriteLine("Loaded into solar system!", MessageType.Success);
         }
 
         public void Update() {
             // Walk:
+            if(autoWalk.x > 0.01) autoWalk.x -= 0.1f * Time.deltaTime;
+            else autoWalk.x = 0;
+            if(autoWalk.y > 0.01) autoWalk.y -= 0.1f * Time.deltaTime;
+            else autoWalk.y = 0;
             if(OWInput.IsNewlyPressed(InputLibrary.up) || OWInput.IsNewlyPressed(InputLibrary.down))
                 if(Learn(Skills.Walk)) {
                     switch(Random.Range(0, 3)) {
@@ -69,6 +76,7 @@ namespace HatchlingSteps {
                         messVector.y = Random.Range(-1.5f, .5f);
                         break;
                     case 1:
+                        messVector.y = 0;
                         DoShit(1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
                         break;
                     default:
@@ -83,6 +91,7 @@ namespace HatchlingSteps {
                         messVector.x = Random.Range(-1.5f, .5f);
                         break;
                     case 1:
+                        messVector.x = 0;
                         DoShit(1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
                         break;
                     default:
@@ -122,31 +131,42 @@ namespace HatchlingSteps {
         }
 
         void DoShit(int shitMask) {
+            bool shitOk = false;
+            if((shitMask >>> (int)Skills.Scout & 0x1) > 0) {
+                if(probeLauncher.IsEquipped()) {
+                    if(probeLauncher.GetActiveProbe() == null) {
+                        if(probeLauncher.AllowLaunchMode()) shitOk = true;
+                        // else ModHelper.Console.WriteLine("Probe launcher not ready! You dummy");
+                    } else if(probeLauncher._allowRetrieval) {
+                        shitOk = true;
+                    } // else ModHelper.Console.WriteLine("Probe not ready to be retrieved! You dummy");
+                } // else ModHelper.Console.WriteLine("Equip probe launcher to fire! You dummy");
+                if(!shitOk) shitMask -= 1 << (int)Skills.Scout;
+            }
+            if((shitMask >>> (int)Skills.Jetpack & 0x1) > 0 && !playerController._playerResources.IsJetpackUsable()) shitMask -= 1 << (int)Skills.Jetpack;
+
             int nbSkills = skillLevel.Length;
             float chosenShit = 0;
             float[] derpSums = new float[nbSkills];
             for(int i = 0;i < nbSkills;i++) {
-                chosenShit += (shitMask >> i & 0x1) / (skillLevel[i] + 4);
+                chosenShit += (shitMask >>> i & 0x1) / (skillLevel[i] + 4f);
                 derpSums[i] = chosenShit;
             }
             chosenShit = Random.Range(0f, chosenShit);
             if(chosenShit < derpSums[(int)Skills.Walk]) {
-                //TODO walk
+                autoWalk += new Vector2(Random.Range(-1f, 1f), Random.Range(-1f, 1f));
             } else if(chosenShit < derpSums[(int)Skills.Jump]) {
                 playerController._jumpNextFixedUpdate = true;
                 playerController._jumpChargeTime = 1f;
+                forced = true;
             } else if(chosenShit < derpSums[(int)Skills.Jetpack]) {
-                ModHelper.Console.WriteLine("You boost up!"); //TODO jetpack
+                playerController._jetpackModel.ActivateBoost();
             } else if(chosenShit < derpSums[(int)Skills.Scout]) {
-                if(probeLauncher.IsEquipped()) {
-                    if(probeLauncher.GetActiveProbe() == null) {
-                        if(probeLauncher.AllowLaunchMode()) probeLauncher.LaunchProbe();
-                        else ModHelper.Console.WriteLine("Probe launcher not ready! You dummy");
-                    } else if(probeLauncher._allowRetrieval) {
-                        probeLauncher.RetrieveProbe(true, false);
-                        probeLauncher._allowRetrieval = false;
-                    } else ModHelper.Console.WriteLine("Probe not ready to be retrieved! You dummy");
-                } else ModHelper.Console.WriteLine("Equip probe launcher to fire! You dummy");
+                if(probeLauncher.GetActiveProbe() == null) probeLauncher.LaunchProbe();
+                else {
+                    probeLauncher.RetrieveProbe(true, false);
+                    probeLauncher._allowRetrieval = false;
+                }
             } else if(chosenShit < derpSums[(int)Skills.Fly]) {
                 //TODO fly
             } else if(chosenShit < derpSums[(int)Skills.Constitution]) {
@@ -162,16 +182,16 @@ namespace HatchlingSteps {
             } else ModHelper.Console.WriteLine("Invalid skill!", MessageType.Warning);//*/
         }
         bool Learn(Skills skill) {
-            if(skillLevel[(int)skill]<Random.Range(0,201)) {
+            if(!forced && skillLevel[(int)skill] < Random.Range(0, 201)) {
                 skillLevel[(int)skill] += increment;
                 ModHelper.Console.WriteLine($"\"{skill}\" skill level increased to {skillLevel[(int)skill]}!", MessageType.Success);
                 PlayerData._currentGameSave.shipLogFactSaves["HatchlingSteps_currentSkill"] = new ShipLogFactSave(string.Join(",", skillLevel));
-                switch (skill) {
-                    case Skills.Walk:
+                switch(skill) {
+                case Skills.Walk:
                     //config.SetSettingsValue("Chance of Tripping Randomly", 0.53-skillLevel[(int)skill]*0.0025); //TODO
-                        break;
-                    default:
-                        break;
+                    break;
+                default:
+                    break;
                 }
                 return true;
             }
@@ -201,17 +221,40 @@ namespace HatchlingSteps {
             static void PlayerCharacterController_ApplyJump_Prefix(PlayerCharacterController __instance) {
                 if(__instance._jumpNextFixedUpdate) {
                     if(Instance.Learn(Skills.Jump)) {
-                        __instance._jumpNextFixedUpdate = false;
-                        __instance._jumpChargeTime = 0f;
-                        __instance._lastJumpTime = Time.time;
+                        switch(Random.Range(0, 3)) {
+                        case 0:
+                            Instance.forced = true;
+                            break;
+                        case 1:
+                            __instance._jumpNextFixedUpdate = false;
+                            __instance._jumpChargeTime = 0f;
+                            __instance._lastJumpTime = Time.time;
+                            Instance.DoShit(1 << (int)Skills.Walk | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
+                            break;
+                        default:
+                            __instance._jumpNextFixedUpdate = false;
+                            __instance._jumpChargeTime = 0f;
+                            __instance._lastJumpTime = Time.time;
+                            break;
+                        }
                     }
                 }
             }
 
             [HarmonyPrefix]
+            [HarmonyPatch(typeof(PlayerCharacterController), nameof(PlayerCharacterController.CalculateJumpSpeed))]
+            static bool PlayerCharacterController_CalculateJumpSpeed_Prefix(PlayerCharacterController __instance, ref float __result) {
+                if(Instance.forced) {
+                    __result = __instance._maxJumpSpeed * Random.Range(.1f, 1.8f);
+                    Instance.forced = false;
+                    return false;
+                } else return true;
+            }
+
+            [HarmonyPrefix]
             [HarmonyPatch(typeof(OWInput), nameof(OWInput.GetAxisValue))]
             static bool OWInput_GetAxisValue_Prefix(ref Vector2 __result, IInputCommands command, InputMode mask = InputMode.All) {
-                if(command == InputLibrary.moveXZ && (mask & (InputMode.Character | InputMode.NomaiRemoteCam)) > 0) __result = OWInput.SharedInputManager.GetAxisValue(command, mask) * Instance.messVector;
+                if(command == InputLibrary.moveXZ && (mask & (InputMode.Character | InputMode.NomaiRemoteCam)) > 0) __result = OWInput.SharedInputManager.GetAxisValue(command, mask) * Instance.messVector + Instance.autoWalk;
                 else return true;
                 return false;
             }
