@@ -1,5 +1,4 @@
-﻿using Epic.OnlineServices;
-using HarmonyLib;//
+﻿using HarmonyLib;//
 using OWML.Common;//
 using OWML.ModHelper;//
 using System.Reflection;//
@@ -11,11 +10,13 @@ namespace HatchlingSteps {
 
         PlayerCharacterController playerController;
         ProbeLauncher probeLauncher;
+        DialogueBoxVer2 subtitles;
         int[] skillLevel = new int[12];
         int increment = 2;
         Vector2 messVector = new(1, 1);
         Vector2 autoWalk = new(0, 0);
         public bool forced = false;
+        float shutUpTimer = 0;
 
         public void Awake() {
             Instance = this;
@@ -59,6 +60,7 @@ namespace HatchlingSteps {
             ModHelper.Events.Unity.FireInNUpdates(() => {
                 playerController = Locator.GetPlayerController();
                 probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
+                subtitles = GameObject.FindWithTag("DialogueGui").GetRequiredComponent<DialogueBoxVer2>();
             }, 30);
             ModHelper.Console.WriteLine("Loaded into solar system!", MessageType.Success);
         }
@@ -181,6 +183,68 @@ namespace HatchlingSteps {
             } else if(chosenShit < derpSums[(int)Skills.Stealth]) {
             } else ModHelper.Console.WriteLine("Invalid skill!", MessageType.Warning);//*/
         }
+
+        void Speak(string text) {
+            switch(skillLevel[(int)Skills.Speak]) {
+            case <5:
+                text = "...";
+                break;
+            case <10:
+                text = "aaaaa!";
+                text = "ooooo!";
+                break;
+            case <20:
+                text = "Aaaaah!";
+                text = "OooOo!";
+                text = "Uuuuuh!";
+                text = "Iiiii!";
+                break;
+            case <30:
+                text = "Muh muh!";
+                text = "Bah bah!";
+                text = "Dah dah!";
+                text = "Beh deh!";
+                break;
+            case <40:
+                text = "Dee dee dah!";
+                text = "Bah BAH bah!";
+                text = "Da ba dee da ba dah!";
+                break;
+            case <60:
+                text = "peak!";
+                text = "space!";
+                text = "woket!";
+                text = "sky!";
+                text = "blablabla!";
+                break;
+            case <100:
+                text = "I speak!";
+                text = "Can say things!";
+                text = "Me hatchling!";
+                text = "Hello!";
+                text = "Friends!";
+                text = "Adventure!";
+                break;
+            default:
+                break;
+            }
+
+            subtitles._potentialOptions = null;
+            subtitles.ResetAllText();
+            subtitles.SetNameFieldVisible(false);
+            subtitles.SetMainFieldDialogueText(text);
+            subtitles._buttonPromptElement.gameObject.SetActive(false);
+            subtitles._mainFieldTextEffect?.StartTextEffect();
+            float shutUpTime = Time.time;
+            ModHelper.Events.Unity.FireInNUpdates(() => {
+                ShutUp(shutUpTime);
+            }, Mathf.RoundToInt((text.Length+20)/(Time.deltaTime*20)));
+            shutUpTimer = shutUpTime;
+        }
+        void ShutUp(float timer) {
+            if(timer == shutUpTimer) subtitles.SetVisible(false);
+        }
+
         bool Learn(Skills skill) {
             if(!forced && skillLevel[(int)skill] < Random.Range(0, 201)) {
                 skillLevel[(int)skill] += increment;
