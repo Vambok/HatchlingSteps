@@ -1,6 +1,7 @@
 ﻿using HarmonyLib;//
 using OWML.Common;//
 using OWML.ModHelper;//
+using Steamworks;
 using System.Reflection;//
 using UnityEngine;//
 
@@ -15,8 +16,8 @@ namespace HatchlingSteps {
         int increment = 2;
         Vector2 messVector = new(1, 1);
         Vector2 autoWalk = new(0, 0);
-        public bool forced = false;
-        float shutUpTimer = 0;
+        bool forced = false;
+        int shutUpToken = 0;
 
         public void Awake() {
             Instance = this;
@@ -151,115 +152,103 @@ namespace HatchlingSteps {
             float chosenShit = 0;
             float[] derpSums = new float[nbSkills];
             for(int i = 0;i < nbSkills;i++) {
-                chosenShit += (shitMask >>> i & 0x1) / (skillLevel[i] + 4f);
+                chosenShit += (shitMask >>> i & 0x1) / (1 + skillLevel[i] / 50f);
                 derpSums[i] = chosenShit;
             }
             chosenShit = Random.Range(0f, chosenShit);
-            if(chosenShit < derpSums[(int)Skills.Walk]) {
-                autoWalk += new Vector2(Random.Range(-1f, 1f), Random.Range(-1f, 1f));
-            } else if(chosenShit < derpSums[(int)Skills.Jump]) {
-                playerController._jumpNextFixedUpdate = true;
-                playerController._jumpChargeTime = 1f;
-                forced = true;
-            } else if(chosenShit < derpSums[(int)Skills.Jetpack]) {
-                playerController._jetpackModel.ActivateBoost();
-            } else if(chosenShit < derpSums[(int)Skills.Scout]) {
-                if(probeLauncher.GetActiveProbe() == null) probeLauncher.LaunchProbe();
-                else {
-                    probeLauncher.RetrieveProbe(true, false);
-                    probeLauncher._allowRetrieval = false;
+            for(int i = 0;i < nbSkills;i++) {
+                if(chosenShit < derpSums[i]) {
+                    PerformShit((Skills)i);
+                    break;
                 }
-            } else if(chosenShit < derpSums[(int)Skills.Fly]) {
-                //TODO fly
-            } else if(chosenShit < derpSums[(int)Skills.Constitution]) {
-            } else if(chosenShit < derpSums[(int)Skills.Speak]) {
-                ModHelper.Console.WriteLine("You: Blablabla!"); //TODO speak
-            } else if(chosenShit < derpSums[(int)Skills.Read]) {
-            } else if(chosenShit < derpSums[(int)Skills.Swim]) {
-                //TODO swim
-            } else if(chosenShit < derpSums[(int)Skills.Cook]) {
-                ModHelper.Console.WriteLine("You cook!"); //TODO cook
-            }/* else if(chosenShit < derpSums[(int)Skills.Repair]) {
-            } else if(chosenShit < derpSums[(int)Skills.Stealth]) {
-            } else ModHelper.Console.WriteLine("Invalid skill!", MessageType.Warning);//*/
+            }
+            void PerformShit(Skills skill) {
+                switch(skill) {
+                case Skills.Walk:
+                    autoWalk += new Vector2(Random.Range(-1f, 1f), Random.Range(-1f, 1f));
+                    break;
+                case Skills.Jump:
+                    playerController._jumpNextFixedUpdate = true;
+                    playerController._jumpChargeTime = 1f;
+                    forced = true;
+                    break;
+                case Skills.Jetpack:
+                    playerController._jetpackModel.ActivateBoost();
+                    break;
+                case Skills.Scout:
+                    if(probeLauncher.GetActiveProbe() == null) probeLauncher.LaunchProbe();
+                    else {
+                        probeLauncher.RetrieveProbe(true, false);
+                        probeLauncher._allowRetrieval = false;
+                    }
+                    break;
+                case Skills.Fly:
+                    ModHelper.Console.WriteLine("You fly!"); //TODO fly
+                    break;
+                case Skills.Speak:
+                    Speak();
+                    break;
+                case Skills.Cook:
+                    ModHelper.Console.WriteLine("You cook!"); //TODO cook
+                    break;
+                default:
+                    ModHelper.Console.WriteLine("Invalid shit! ("+skill+")", MessageType.Warning);
+                    break;
+                }
+            }
         }
 
-        void Speak(string text) {
-            switch(skillLevel[(int)Skills.Speak]) {
-            case <5:
-                text = "...";
-                break;
-            case <10:
-                text = "aaaaa!";
-                text = "ooooo!";
-                break;
-            case <20:
-                text = "Aaaaah!";
-                text = "OooOo!";
-                text = "Uuuuuh!";
-                text = "Iiiii!";
-                break;
-            case <30:
-                text = "Muh muh!";
-                text = "Bah bah!";
-                text = "Dah dah!";
-                text = "Beh deh!";
-                break;
-            case <40:
-                text = "Dee dee dah!";
-                text = "Bah BAH bah!";
-                text = "Da ba dee da ba dah!";
-                break;
-            case <60:
-                text = "peak!";
-                text = "space!";
-                text = "woket!";
-                text = "sky!";
-                text = "blablabla!";
-                break;
-            case <100:
-                text = "I speak!";
-                text = "Can say things!";
-                text = "Me hatchling!";
-                text = "Hello!";
-                text = "Friends!";
-                text = "Adventure!";
-                break;
-            default:
-                break;
-            }
-
+        void Speak() {
+            string[] text = skillLevel[(int)Skills.Speak] switch {
+                < 5 => ["..."],
+                < 10 => ["aaaaa!", "ooooo!", "aa?", "mmm!", "oh!"],
+                < 20 => ["Aaaaah!", "OooOo!", "Uuuuuh!", "Iiiii!", "Aaa?", "Ooooh!", "Hmmm!", "Eeeep!"],
+                < 30 => ["Muh muh!", "Bah bah!", "Dah dah!", "Beh deh!", "Buh buh!", "Mah mah!", "Deh doh!", "Hah bah!"],
+                < 40 => ["Dee dee dah!", "Bah BAH bah!", "Da ba dee da ba dah!", "Ba da bum!", "Dee dah doo!", "Buh dee bah!", "Mah na mah!"],
+                < 60 => ["peak!", "space!", "woket!", "sky!", "blablabla!", "suit!", "ship!", "fire!", "stars!", "mashmaloo!", "nomai?"],
+                < 100 => ["I words!", "Can talk!", "Me explorer!", "Ship go!", "Stars big!", "Helmet good!", "I speak!", "Can say things!", "Me hatchling!", "Hello!", "Friends!", "Adventure!"],
+                < 150 => ["That was almost intentional.", "Yup, I meant to do that.", "Wait, was that speaking?", "Gravity is rude.", "Miss the campfire.", "I wonder if trees get dizzy.", "Oops! Failed again.", "No idea of what I'm doing.", "That wasn't based on anything.", "Space is amazing!", "I'm getting distracted.", "Do planets know they're planets?", "There sure is a lot of space in space.", "The universe is a strange place.", "I wonder where all the stars end."],
+                _ => ["Through perseverance, I'll eventually succeed.", "If Feldspar can do it, so can I.", "I have absolutely no idea what I'm doing.", "Everything is better with a campfire.", "Maybe we just got tired of swimming.", "A single Eye? Not even close to half a view.", "Sometimes I forget how small I am.", "If I keep going, I might even find my long lost pet stone.", "I wonder what the stars might think of us.", "I should probably not say this out loud.", "The universe is very big, and I am very throwable."],
+            };
             subtitles._potentialOptions = null;
             subtitles.ResetAllText();
             subtitles.SetNameFieldVisible(false);
-            subtitles.SetMainFieldDialogueText(text);
+            subtitles.SetMainFieldDialogueText(text[Random.Range(0, text.Length)]);
             subtitles._buttonPromptElement.gameObject.SetActive(false);
             subtitles._mainFieldTextEffect?.StartTextEffect();
-            float shutUpTime = Time.time;
-            ModHelper.Events.Unity.FireInNUpdates(() => {
-                ShutUp(shutUpTime);
-            }, Mathf.RoundToInt((text.Length+20)/(Time.deltaTime*20)));
-            shutUpTimer = shutUpTime;
-        }
-        void ShutUp(float timer) {
-            if(timer == shutUpTimer) subtitles.SetVisible(false);
+            int localShutUpToken = ++shutUpToken;
+            ModHelper.Events.Unity.FireInNUpdates(() => { if(localShutUpToken == shutUpToken) subtitles.SetVisible(false); }, Mathf.RoundToInt((text.Length + 20) / (Time.deltaTime * 20)));
         }
 
         bool Learn(Skills skill) {
-            if(!forced && skillLevel[(int)skill] < Random.Range(0, 201)) {
+            if(skill == Skills.Cook) skillLevel[(int)skill] += increment;
+            else if(!forced && skillLevel[(int)skill] < Random.Range(0, 201)) {
                 skillLevel[(int)skill] += increment;
                 ModHelper.Console.WriteLine($"\"{skill}\" skill level increased to {skillLevel[(int)skill]}!", MessageType.Success);
                 PlayerData._currentGameSave.shipLogFactSaves["HatchlingSteps_currentSkill"] = new ShipLogFactSave(string.Join(",", skillLevel));
-                switch(skill) {
-                case Skills.Walk:
-                    //config.SetSettingsValue("Chance of Tripping Randomly", 0.53-skillLevel[(int)skill]*0.0025); //TODO
-                    break;
-                default:
-                    break;
-                }
+                if(skill == Skills.Walk || skill == Skills.Constitution || skill == Skills.Jetpack || skill == Skills.Scout) UpdateTripping();
                 return true;
             }
             return false;
+        }
+        void UpdateTripping() {
+            foreach(IModBehaviour mod in ModHelper.Interaction.GetMods()) {
+                if(mod.ModHelper.Manifest.UniqueName == "Owen_013.TrippingAndClumsiness") {
+                    float movementFailChance = FailChance(Skills.Walk, true);
+                    mod.ModHelper.Config.SetSettingsValue("Trip Duration", 2 / Mathf.Max(increment, 0.5f));
+                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping Randomly", movementFailChance / 2);
+                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping per Point of Damage", FailChance(Skills.Constitution, true) / 10);
+                    mod.ModHelper.Config.SetSettingsValue("Reverse Boost Chance", FailChance(Skills.Jetpack) / 2);
+                    mod.ModHelper.Config.SetSettingsValue("Scout Misfire Chance", FailChance(Skills.Scout) / 4);
+                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping while Sprinting", movementFailChance);
+                    mod.Configure(mod.ModHelper.Config);
+                    break;
+                }
+            }
+
+            float FailChance(Skills skill, bool residual = false) {
+                return 1 - Mathf.Min(skillLevel[(int)skill] * 0.005f, 1) + (residual ? 0.08f - increment / 100f : 0);
+            }
         }
 
         enum Skills {
@@ -321,6 +310,31 @@ namespace HatchlingSteps {
                 if(command == InputLibrary.moveXZ && (mask & (InputMode.Character | InputMode.NomaiRemoteCam)) > 0) __result = OWInput.SharedInputManager.GetAxisValue(command, mask) * Instance.messVector + Instance.autoWalk;
                 else return true;
                 return false;
+            }
+
+            [HarmonyPostfix]
+            [HarmonyPatch(typeof(Campfire), nameof(Campfire.StartRoasting))]
+            static void Campfire_StartRoasting_Postfix() {
+                Instance.Learn(Skills.Cook);
+            }
+            [HarmonyPrefix]
+            [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.OnEatMarshmallow))]
+            static void PlayerResources_OnEatMarshmallow_Prefix(float toastedFraction) {
+                Instance.ModHelper.Console.WriteLine("Before pref:"+toastedFraction); //TEST
+                float noobModifier = 1 - Instance.skillLevel[(int)Skills.Cook] / 150f;
+                toastedFraction = (toastedFraction - 0.7f) * (1 + noobModifier) + 0.7f + Mathf.Max(noobModifier, 0) * (toastedFraction < 0.7f ? -0.5f : 0.3f);
+                Instance.ModHelper.Console.WriteLine("After pref:" + toastedFraction); //TEST
+            }
+            [HarmonyPostfix]
+            [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.OnEatMarshmallow))]
+            static void PlayerResources_OnEatMarshmallow_Postfix(float toastedFraction) {
+                Instance.ModHelper.Console.WriteLine("Before post:" + toastedFraction); //TEST
+                float damage;
+                if(toastedFraction < 0f) damage = -toastedFraction / 1.2f;
+                else if(toastedFraction > 1f) damage = (toastedFraction - 1f) / 0.6f;
+                else return;
+                Instance.ModHelper.Console.WriteLine("Damage:" + damage * 50f); //TEST
+                Locator.GetPlayerBody().GetComponent<PlayerResources>().ApplyInstantDamage(damage * 50f, InstantDamageType.Puncture);
             }
         }
     }
