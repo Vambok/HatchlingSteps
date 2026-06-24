@@ -9,6 +9,7 @@ namespace HatchlingSteps {
     public class HatchlingSteps : ModBehaviour {
         public static HatchlingSteps Instance;
 
+        bool sceneLoaded = false;
         PlayerCharacterController playerController;
         ProbeLauncher probeLauncher;
         DialogueBoxVer2 subtitles;
@@ -54,19 +55,22 @@ namespace HatchlingSteps {
         }
 
         public void OnCompleteSceneLoad(OWScene previousScene, OWScene newScene) {
-            if(newScene != OWScene.SolarSystem) return;
-
-            ShipLogFactSave saveData = PlayerData.GetShipLogFactSave("HatchlingSteps_currentSkill");
-            if(saveData != null) skillLevel = System.Array.ConvertAll(saveData.id.Split(','), int.Parse);
-            ModHelper.Events.Unity.FireInNUpdates(() => {
-                playerController = Locator.GetPlayerController();
-                probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
-                subtitles = GameObject.FindWithTag("DialogueGui").GetRequiredComponent<DialogueBoxVer2>();
-            }, 30);
-            ModHelper.Console.WriteLine("Loaded into solar system!", MessageType.Success);
+            if(newScene != OWScene.SolarSystem) sceneLoaded = false;
+            else {
+                ShipLogFactSave saveData = PlayerData.GetShipLogFactSave("HatchlingSteps_currentSkill");
+                if(saveData != null) skillLevel = System.Array.ConvertAll(saveData.id.Split(','), int.Parse);
+                ModHelper.Events.Unity.FireInNUpdates(() => {
+                    playerController = Locator.GetPlayerController();
+                    probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
+                    subtitles = GameObject.FindWithTag("DialogueGui").GetRequiredComponent<DialogueBoxVer2>();
+                    sceneLoaded = true;
+                }, 30);
+                ModHelper.Console.WriteLine("Loaded into solar system!", MessageType.Success);
+            }
         }
 
         public void Update() {
+            if(!sceneLoaded) return;
             // Walk:
             if(autoWalk.x > 0.01) autoWalk.x -= 0.1f * Time.deltaTime;
             else autoWalk.x = 0;
@@ -76,14 +80,18 @@ namespace HatchlingSteps {
                 if(Learn(Skills.Walk)) {
                     switch(Random.Range(0, 3)) {
                     case 0:
-                        messVector.y = Random.Range(-1.5f, .5f);
+                        messVector.y = Random.Range(-1.5f, .9f);
+                        ModHelper.Console.WriteLine("You mess!"); //TEST
                         break;
                     case 1:
                         messVector.y = 0;
+                        ModHelper.Console.WriteLine("You shit!"); //TEST
                         DoShit(1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
                         break;
                     default:
-                        messVector.y = 0;
+                        messVector.x = Random.Range(-.5f, .5f);
+                        messVector.y = Random.Range(-1.5f, .9f);
+                        ModHelper.Console.WriteLine("You mess x2!"); //TEST
                         break;
                     }
                 }
@@ -91,14 +99,15 @@ namespace HatchlingSteps {
                 if(Learn(Skills.Walk)) {
                     switch(Random.Range(0, 3)) {
                     case 0:
-                        messVector.x = Random.Range(-1.5f, .5f);
+                        messVector.x = Random.Range(-1.5f, .9f);
                         break;
                     case 1:
                         messVector.x = 0;
                         DoShit(1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
                         break;
                     default:
-                        messVector.x = 0;
+                        messVector.x = Random.Range(-1.5f, .9f);
+                        messVector.y = Random.Range(-.5f, .5f);
                         break;
                     }
                 }
@@ -146,7 +155,7 @@ namespace HatchlingSteps {
                 } // else ModHelper.Console.WriteLine("Equip probe launcher to fire! You dummy");
                 if(!shitOk) shitMask -= 1 << (int)Skills.Scout;
             }
-            if((shitMask >>> (int)Skills.Jetpack & 0x1) > 0 && !playerController._playerResources.IsJetpackUsable()) shitMask -= 1 << (int)Skills.Jetpack;
+            if((shitMask >>> (int)Skills.Jetpack & 0x1) > 0 && (!Locator.GetPlayerSuit().IsWearingSuit(true) || !playerController._playerResources.IsJetpackUsable())) shitMask -= 1 << (int)Skills.Jetpack;
 
             int nbSkills = skillLevel.Length;
             float chosenShit = 0;
@@ -159,6 +168,7 @@ namespace HatchlingSteps {
             for(int i = 0;i < nbSkills;i++) {
                 if(chosenShit < derpSums[i]) {
                     PerformShit((Skills)i);
+                    ModHelper.Console.WriteLine("You " + (Skills)i); //TEST
                     break;
                 }
             }
@@ -234,20 +244,20 @@ namespace HatchlingSteps {
         void UpdateTripping() {
             foreach(IModBehaviour mod in ModHelper.Interaction.GetMods()) {
                 if(mod.ModHelper.Manifest.UniqueName == "Owen_013.TrippingAndClumsiness") {
-                    float movementFailChance = FailChance(Skills.Walk, true);
+                    float movementFailChance = FailChance(Skills.Walk, true) / 4;
                     mod.ModHelper.Config.SetSettingsValue("Trip Duration", 2 / Mathf.Max(increment, 0.5f));
-                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping Randomly", movementFailChance / 2);
+                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping Randomly", movementFailChance);
                     mod.ModHelper.Config.SetSettingsValue("Chance of Tripping per Point of Damage", FailChance(Skills.Constitution, true) / 10);
                     mod.ModHelper.Config.SetSettingsValue("Reverse Boost Chance", FailChance(Skills.Jetpack) / 2);
                     mod.ModHelper.Config.SetSettingsValue("Scout Misfire Chance", FailChance(Skills.Scout) / 4);
-                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping while Sprinting", movementFailChance);
+                    mod.ModHelper.Config.SetSettingsValue("Chance of Tripping while Sprinting", movementFailChance * 2);
                     mod.Configure(mod.ModHelper.Config);
                     break;
                 }
             }
 
             float FailChance(Skills skill, bool residual = false) {
-                return 1 - Mathf.Min(skillLevel[(int)skill] * 0.005f, 1) + (residual ? 0.08f - increment / 100f : 0);
+                return 1 - Mathf.Min(skillLevel[(int)skill] * 0.005f, 1) + (residual ? 0.04f - increment / 200f : 0);
             }
         }
 
@@ -320,7 +330,7 @@ namespace HatchlingSteps {
             [HarmonyPrefix]
             [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.OnEatMarshmallow))]
             static void PlayerResources_OnEatMarshmallow_Prefix(float toastedFraction) {
-                Instance.ModHelper.Console.WriteLine("Before pref:"+toastedFraction); //TEST
+                Instance.ModHelper.Console.WriteLine("Before pref:"+toastedFraction+" skill:" + Instance.skillLevel[(int)Skills.Cook]); //TEST
                 float noobModifier = 1 - Instance.skillLevel[(int)Skills.Cook] / 150f;
                 toastedFraction = (toastedFraction - 0.7f) * (1 + noobModifier) + 0.7f + Mathf.Max(noobModifier, 0) * (toastedFraction < 0.7f ? -0.5f : 0.3f);
                 Instance.ModHelper.Console.WriteLine("After pref:" + toastedFraction); //TEST
