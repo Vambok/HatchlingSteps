@@ -1,7 +1,6 @@
 ﻿using HarmonyLib;//
 using OWML.Common;//
 using OWML.ModHelper;//
-using Steamworks;
 using System.Reflection;//
 using UnityEngine;//
 
@@ -9,16 +8,29 @@ namespace HatchlingSteps {
     public class HatchlingSteps : ModBehaviour {
         public static HatchlingSteps Instance;
 
+        // Global variables:
         bool sceneLoaded = false;
+
+        // Game objects:
         PlayerCharacterController playerController;
         ProbeLauncher probeLauncher;
         DialogueBoxVer2 subtitles;
-        int[] skillLevel = new int[12];
+        Campfire fakeCampfire;
+        ShipCockpitController shipCockpitController;
+
+        // Data:
+        const int nbSkills = 12;
+        int[] shitParams = new int[nbSkills];//TODO
+        int[] skillLevel = new int[nbSkills];
         int increment = 2;
-        Vector2 messVector = new(1, 1);
-        Vector2 autoWalk = new(0, 0);
-        bool forced = false;
+        Vector2 messVector = Vector2.one;
+        Vector2 autoWalk = Vector2.zero;
+        int forced = 0;
         int shutUpToken = 0;
+        Vector3 autoThrust = Vector3.zero;
+        Vector2 autoRotation = Vector2.zero;
+        Vector3 autoShipThrust = Vector3.zero;
+        Vector2 autoShipRotation = Vector2.zero;
 
         public void Awake() {
             Instance = this;
@@ -41,8 +53,9 @@ namespace HatchlingSteps {
         public override void Configure(IModConfig config) {
             if(LoadManager.GetCurrentScene() == OWScene.SolarSystem) {
                 if(config.GetSettingsValue<bool>("Unlearn")) {
-                    skillLevel = new int[12];
+                    skillLevel = new int[nbSkills];
                     config.SetSettingsValue("Unlearn", false);
+                    UpdateTripping();
                 }
                 increment = config.GetSettingsValue<string>("Skill") switch {
                     "Rock" => 0,
@@ -63,6 +76,9 @@ namespace HatchlingSteps {
                     playerController = Locator.GetPlayerController();
                     probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
                     subtitles = GameObject.FindWithTag("DialogueGui").GetRequiredComponent<DialogueBoxVer2>();
+                    fakeCampfire = new Campfire();
+                    GlobalMessenger.AddListener("ExitRoastingMode", () => ModHelper.Events.Unity.FireInNUpdates(() => { if(forced == (int)Skills.Cook) forced = 0; }, 10));
+                    shipCockpitController = Locator.GetShipTransform().Find("Module_Cockpit/Systems_Cockpit/ShipCockpitController").GetComponent<ShipCockpitController>();
                     sceneLoaded = true;
                 }, 30);
                 ModHelper.Console.WriteLine("Loaded into solar system!", MessageType.Success);
@@ -76,55 +92,141 @@ namespace HatchlingSteps {
             else autoWalk.x = 0;
             if(autoWalk.y > 0.01) autoWalk.y -= 0.1f * Time.deltaTime;
             else autoWalk.y = 0;
-            if(OWInput.IsNewlyPressed(InputLibrary.up) || OWInput.IsNewlyPressed(InputLibrary.down))
+            if(OWInput.IsNewlyPressed(InputLibrary.up, InputMode.Character | InputMode.NomaiRemoteCam) || OWInput.IsNewlyPressed(InputLibrary.down, InputMode.Character | InputMode.NomaiRemoteCam)) {
                 if(Learn(Skills.Walk)) {
                     switch(Random.Range(0, 3)) {
                     case 0:
                         messVector.y = Random.Range(-1.5f, .9f);
-                        ModHelper.Console.WriteLine("You mess!"); //TEST
+                        ModHelper.Console.WriteLine("Walk: You mess!"); //TEST
                         break;
                     case 1:
                         messVector.y = 0;
-                        ModHelper.Console.WriteLine("You shit!"); //TEST
+                        ModHelper.Console.WriteLine("Walk: You shit!"); //TEST
                         DoShit(1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
                         break;
                     default:
                         messVector.x = Random.Range(-.5f, .5f);
                         messVector.y = Random.Range(-1.5f, .9f);
-                        ModHelper.Console.WriteLine("You mess x2!"); //TEST
+                        ModHelper.Console.WriteLine("Walk: You mess x2!"); //TEST
                         break;
                     }
                 }
-            if(OWInput.IsNewlyPressed(InputLibrary.right) || OWInput.IsNewlyPressed(InputLibrary.left))
+            } else if(OWInput.IsNewlyPressed(InputLibrary.right, InputMode.Character | InputMode.NomaiRemoteCam) || OWInput.IsNewlyPressed(InputLibrary.left, InputMode.Character | InputMode.NomaiRemoteCam))
                 if(Learn(Skills.Walk)) {
                     switch(Random.Range(0, 3)) {
                     case 0:
                         messVector.x = Random.Range(-1.5f, .9f);
+                        ModHelper.Console.WriteLine("Walk: You mess!"); //TEST
                         break;
                     case 1:
                         messVector.x = 0;
                         DoShit(1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
+                        ModHelper.Console.WriteLine("Walk: You shit!"); //TEST
                         break;
                     default:
                         messVector.x = Random.Range(-1.5f, .9f);
                         messVector.y = Random.Range(-.5f, .5f);
+                        ModHelper.Console.WriteLine("Walk: You mess x2!"); //TEST
                         break;
                     }
                 }
             if(OWInput.IsNewlyReleased(InputLibrary.up) || OWInput.IsNewlyReleased(InputLibrary.down)) messVector.y = 1;
             if(OWInput.IsNewlyReleased(InputLibrary.right) || OWInput.IsNewlyReleased(InputLibrary.left)) messVector.x = 1;
-            /*/ Jump://thrustUp
-            if(OWInput.IsNewlyPressed(InputLibrary.jump)) ;
-            // Jetpack:
+
+            // Fly:
+            if((OWInput.IsInputMode(InputMode.ShipCockpit | InputMode.LandingCam) && !shipCockpitController._landingManager.IsLanded()) || (OWInput.IsInputMode(InputMode.Character | InputMode.NomaiRemoteCam) && playerController._isWearingSuit && playerController._playerResources.IsJetpackUsable() && !playerController.IsGrounded() && !playerController._isTumbling)) {
+                InputMode mask = InputMode.Character | InputMode.ShipCockpit | InputMode.LandingCam | InputMode.NomaiRemoteCam;
+                if(OWInput.IsNewlyPressed(InputLibrary.thrustX, mask) || OWInput.IsNewlyPressed(InputLibrary.thrustZ, mask) || OWInput.IsNewlyPressed(InputLibrary.thrustUp, mask) || OWInput.IsNewlyPressed(InputLibrary.thrustDown, mask)) {
+                    if(Learn(Skills.Fly)) {
+                        Vector2 tempRot = Vector2.zero;
+                        Vector3 tempMov = new(OWInput.GetValue(InputLibrary.thrustX), 0, OWInput.GetValue(InputLibrary.thrustZ));
+                        if(tempMov.sqrMagnitude > 1) tempMov.Normalize();
+                        tempMov.y = OWInput.GetValue(InputLibrary.thrustUp) - OWInput.GetValue(InputLibrary.thrustDown);
+                        switch(Random.Range(0, 3)) {
+                        case 0:
+                            tempMov *= Random.Range(-2.5f, -.1f);
+                            ModHelper.Console.WriteLine("Fly: You mess!"); //TEST
+                            break;
+                        case 1:
+                            tempMov *= -1;
+                            ModHelper.Console.WriteLine("Fly: You shit!"); //TEST
+                            DoShit(1 << (int)Skills.Cook | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak);
+                            break;
+                        default:
+                            tempMov *= Random.Range(-2.5f, -.1f);
+                            tempRot = new Vector2(OWInput.GetValue(InputLibrary.pitch), OWInput.GetValue(InputLibrary.yaw)) * Random.Range(-2.5f, -.1f);
+                            ModHelper.Console.WriteLine("Fly: You mess x2!"); //TEST
+                            break;
+                        }
+                        if(OWInput.IsInputMode(InputMode.ShipCockpit | InputMode.LandingCam)) {
+                            autoThrust = Vector3.zero;
+                            autoRotation = Vector2.zero;
+                            autoShipThrust = tempMov;
+                            if(tempRot.sqrMagnitude > .001f) autoShipRotation = tempRot;
+                        } else {
+                            autoShipThrust = Vector3.zero;
+                            autoShipRotation = Vector2.zero;
+                            autoThrust = tempMov;
+                            if(tempRot.sqrMagnitude > .001f) autoRotation = tempRot;
+                        }
+                    }
+                } else if(OWInput.IsNewlyPressed(InputLibrary.yaw, mask) || OWInput.IsNewlyPressed(InputLibrary.pitch, mask))
+                    if(Learn(Skills.Fly)) {
+                        Vector3 tempMov = Vector3.zero;
+                        Vector2 tempRot = new(OWInput.GetValue(InputLibrary.pitch), OWInput.GetValue(InputLibrary.yaw));
+                        switch(Random.Range(0, 3)) {
+                        case 0:
+                            tempRot *= Random.Range(-2.5f, -.1f);
+                            ModHelper.Console.WriteLine("Fly: You mess!"); //TEST
+                            break;
+                        case 1:
+                            tempRot *= -1;
+                            ModHelper.Console.WriteLine("Fly: You shit!"); //TEST
+                            DoShit(1 << (int)Skills.Cook | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak);
+                            break;
+                        default:
+                            tempRot *= Random.Range(-2.5f, -.1f);
+                            tempMov = new(OWInput.GetValue(InputLibrary.thrustX), 0, OWInput.GetValue(InputLibrary.thrustZ));
+                            if(tempMov.sqrMagnitude > 1) tempMov.Normalize();
+                            tempMov.y = OWInput.GetValue(InputLibrary.thrustUp) - OWInput.GetValue(InputLibrary.thrustDown);
+                            ModHelper.Console.WriteLine("Fly: You mess x2!"); //TEST
+                            break;
+                        }
+                        if(OWInput.IsInputMode(InputMode.ShipCockpit | InputMode.LandingCam)) {
+                            autoThrust = Vector3.zero;
+                            autoRotation = Vector2.zero;
+                            if(tempMov.sqrMagnitude > .001f) autoShipThrust = tempMov;
+                            autoShipRotation = tempRot;
+                        } else {
+                            autoShipThrust = Vector3.zero;
+                            autoShipRotation = Vector2.zero;
+                            if(tempMov.sqrMagnitude > .001f) autoThrust = tempMov;
+                            autoRotation = tempRot;
+                        }
+                    }
+            }
+            if(OWInput.IsNewlyReleased(InputLibrary.thrustX) || OWInput.IsNewlyReleased(InputLibrary.thrustZ) || OWInput.IsNewlyReleased(InputLibrary.thrustUp) || OWInput.IsNewlyReleased(InputLibrary.thrustDown))
+                if(!OWInput.IsPressed(InputLibrary.thrustX) && !OWInput.IsPressed(InputLibrary.thrustZ) && !OWInput.IsPressed(InputLibrary.thrustUp) && !OWInput.IsPressed(InputLibrary.thrustDown)) {
+                    autoThrust = Vector3.zero;
+                    autoShipThrust = Vector3.zero;
+                }
+            if(OWInput.IsNewlyReleased(InputLibrary.pitch) || OWInput.IsNewlyReleased(InputLibrary.yaw))
+                if(!OWInput.IsPressed(InputLibrary.pitch) && !OWInput.IsPressed(InputLibrary.yaw)) {
+                    autoRotation = Vector3.zero;
+                    autoShipRotation = Vector3.zero;
+                }
+
+            // Cook:
+            if(OWInput.GetInputMode() == InputMode.Roasting && forced == (int)Skills.Cook && OWInput.IsNewlyPressed(InputLibrary.jump)) GlobalMessenger.FireEvent("ExitRoastingMode");
+
+            /*/ Jetpack:
             if(OWInput.IsNewlyPressed(InputLibrary.extendStick)) ;
 
             // Scout:
-            // Fly:
             // Constitution:
             // Speak:
             // Read:
             // Swim:
-            // Cook:
             // Repair:
             // Stealth:
             if(OWInput.IsNewlyPressed(InputLibrary.boost)) ;
@@ -143,8 +245,17 @@ namespace HatchlingSteps {
         }
 
         void DoShit(int shitMask) {
-            bool shitOk = false;
+            // Can you Walk or Jump?
+            if(!(playerController._isAlignedToForce || playerController._isZeroGMovementEnabled) || playerController._isMovementLocked || playerController._isTumbling) {
+                shitMask &= ~(1 << (int)Skills.Walk | 1 << (int)Skills.Jump);
+            } else if(!playerController.HasGroundControl())
+                shitMask &= ~(1 << (int)Skills.Walk);
+            // Can you Jetpack?
+            if(!Locator.GetPlayerSuit().IsWearingSuit(true) || !playerController._playerResources.IsJetpackUsable())
+                shitMask &= ~(1 << (int)Skills.Jetpack);
+            // Can you Scout? (Launch or retrieve probe)
             if((shitMask >>> (int)Skills.Scout & 0x1) > 0) {
+                bool shitOk = false;
                 if(probeLauncher.IsEquipped()) {
                     if(probeLauncher.GetActiveProbe() == null) {
                         if(probeLauncher.AllowLaunchMode()) shitOk = true;
@@ -153,39 +264,54 @@ namespace HatchlingSteps {
                         shitOk = true;
                     } // else ModHelper.Console.WriteLine("Probe not ready to be retrieved! You dummy");
                 } // else ModHelper.Console.WriteLine("Equip probe launcher to fire! You dummy");
-                if(!shitOk) shitMask -= 1 << (int)Skills.Scout;
+                if(!shitOk) shitMask &= ~(1 << (int)Skills.Scout);
             }
-            if((shitMask >>> (int)Skills.Jetpack & 0x1) > 0 && (!Locator.GetPlayerSuit().IsWearingSuit(true) || !playerController._playerResources.IsJetpackUsable())) shitMask -= 1 << (int)Skills.Jetpack;
+            // Can you Fly? (ship or jetpack)
+            if((!shipCockpitController._playerAtFlightConsole || !OWInput.IsInputMode(InputMode.ShipCockpit | InputMode.LandingCam)) && (!Locator.GetPlayerSuit().IsWearingSuit() || !playerController._playerResources.IsJetpackUsable()))
+                shitMask &= ~(1 << (int)Skills.Fly);
+            // Can you Cook?
+            if(!OWInput.IsInputMode(InputMode.Character | InputMode.NomaiRemoteCam))
+                shitMask &= ~(1 << (int)Skills.Cook);
 
-            int nbSkills = skillLevel.Length;
+            if(shitMask <= 0) {
+                ModHelper.Console.WriteLine("Can't do shit!"); //TEST
+                return;
+            }
+            ModHelper.Console.WriteLine("6:" + shitMask); //TEST
+
             float chosenShit = 0;
             float[] derpSums = new float[nbSkills];
-            for(int i = 0;i < nbSkills;i++) {
-                chosenShit += (shitMask >>> i & 0x1) / (1 + skillLevel[i] / 50f);
+            for(int i = 0; i < nbSkills; i++) {
+                chosenShit += (shitMask >>> i & 0x1) / (i == (int)Skills.Speak ? (3 + skillLevel[i] / 100f) : ((i == (int)Skills.Cook ? 8 : 1) + skillLevel[i] / 50f)); // Cook starts eight times less likely to do randomly
                 derpSums[i] = chosenShit;
             }
             chosenShit = Random.Range(0f, chosenShit);
-            for(int i = 0;i < nbSkills;i++) {
+            for(int i = 0; i < nbSkills; i++) {
                 if(chosenShit < derpSums[i]) {
-                    PerformShit((Skills)i);
                     ModHelper.Console.WriteLine("You " + (Skills)i); //TEST
+                    PerformShit((Skills)i);
                     break;
                 }
             }
             void PerformShit(Skills skill) {
                 switch(skill) {
                 case Skills.Walk:
+                    ModHelper.Console.WriteLine("You walk!"); //TEST
                     autoWalk += new Vector2(Random.Range(-1f, 1f), Random.Range(-1f, 1f));
                     break;
                 case Skills.Jump:
+                    ModHelper.Console.WriteLine("You jump!"); //TEST
                     playerController._jumpNextFixedUpdate = true;
                     playerController._jumpChargeTime = 1f;
-                    forced = true;
+                    forced = (int)Skills.Jump;
                     break;
                 case Skills.Jetpack:
+                    ModHelper.Console.WriteLine("You boost jetpack!"); //TEST
                     playerController._jetpackModel.ActivateBoost();
+                    forced = (int)Skills.Jetpack;
                     break;
                 case Skills.Scout:
+                    ModHelper.Console.WriteLine("You scout!"); //TEST
                     if(probeLauncher.GetActiveProbe() == null) probeLauncher.LaunchProbe();
                     else {
                         probeLauncher.RetrieveProbe(true, false);
@@ -193,16 +319,29 @@ namespace HatchlingSteps {
                     }
                     break;
                 case Skills.Fly:
-                    ModHelper.Console.WriteLine("You fly!"); //TODO fly
+                    if(OWInput.IsInputMode(InputMode.ShipCockpit | InputMode.LandingCam)) {
+                        ModHelper.Console.WriteLine("You fly ship!"); //TEST
+                        autoShipThrust = new Vector3(Random.Range(-1f, 1f), Random.Range(-1f, 1f), Random.Range(-1f, 1f));
+                        autoShipRotation = new Vector3(Random.Range(-.5f, .5f), Random.Range(-.5f, .5f), Random.Range(-.5f, .5f));
+                        ModHelper.Events.Unity.FireInNUpdates(() => { autoShipThrust = Vector3.zero; autoShipRotation = Vector3.zero; }, Mathf.RoundToInt(.5f / Time.deltaTime));
+                    } else {
+                        ModHelper.Console.WriteLine("You fly jetpack!"); //TEST
+                        autoThrust = new Vector3(Random.Range(-1f, 1f), Random.Range(-1f, 1f), Random.Range(-1f, 1f));
+                        autoRotation = new Vector3(Random.Range(-.5f, .5f), Random.Range(-.5f, .5f), Random.Range(-.5f, .5f));
+                        ModHelper.Events.Unity.FireInNUpdates(() => { autoThrust = Vector3.zero; autoRotation = Vector3.zero; }, Mathf.RoundToInt(.5f / Time.deltaTime));
+                    }
                     break;
                 case Skills.Speak:
+                    ModHelper.Console.WriteLine("You speak!"); //TEST
                     Speak();
                     break;
                 case Skills.Cook:
-                    ModHelper.Console.WriteLine("You cook!"); //TODO cook
+                    ModHelper.Console.WriteLine("You cook!"); //TEST
+                    forced = (int)Skills.Cook;
+                    GlobalMessenger<Campfire>.FireEvent("EnterRoastingMode", fakeCampfire);
                     break;
                 default:
-                    ModHelper.Console.WriteLine("Invalid shit! ("+skill+")", MessageType.Warning);
+                    ModHelper.Console.WriteLine("Invalid shit! (" + skill + ")", MessageType.Warning);
                     break;
                 }
             }
@@ -227,17 +366,19 @@ namespace HatchlingSteps {
             subtitles._buttonPromptElement.gameObject.SetActive(false);
             subtitles._mainFieldTextEffect?.StartTextEffect();
             int localShutUpToken = ++shutUpToken;
-            ModHelper.Events.Unity.FireInNUpdates(() => { if(localShutUpToken == shutUpToken) subtitles.SetVisible(false); }, Mathf.RoundToInt((text.Length + 20) / (Time.deltaTime * 20)));
+            ModHelper.Events.Unity.FireInNUpdates(() => { if(localShutUpToken == shutUpToken) subtitles.SetVisible(false); }, Mathf.RoundToInt((text.Length + 40) / (Time.deltaTime * 20)));
         }
 
         bool Learn(Skills skill) {
-            if(skill == Skills.Cook) skillLevel[(int)skill] += increment;
-            else if(!forced && skillLevel[(int)skill] < Random.Range(0, 201)) {
-                skillLevel[(int)skill] += increment;
-                ModHelper.Console.WriteLine($"\"{skill}\" skill level increased to {skillLevel[(int)skill]}!", MessageType.Success);
-                PlayerData._currentGameSave.shipLogFactSaves["HatchlingSteps_currentSkill"] = new ShipLogFactSave(string.Join(",", skillLevel));
-                if(skill == Skills.Walk || skill == Skills.Constitution || skill == Skills.Jetpack || skill == Skills.Scout) UpdateTripping();
-                return true;
+            if(forced < 1) {
+                if(skill == Skills.Cook) skillLevel[(int)skill] += increment;
+                else if(skillLevel[(int)skill] < Random.Range(0, 201)) {
+                    skillLevel[(int)skill] += increment;
+                    ModHelper.Console.WriteLine($"\"{skill}\" skill level increased to {skillLevel[(int)skill]}!", MessageType.Success);
+                    PlayerData._currentGameSave.shipLogFactSaves["HatchlingSteps_currentSkill"] = new ShipLogFactSave(string.Join(",", skillLevel));
+                    if(skill == Skills.Walk || skill == Skills.Constitution || skill == Skills.Jetpack || skill == Skills.Scout) UpdateTripping();
+                    return true;
+                }
             }
             return false;
         }
@@ -251,6 +392,7 @@ namespace HatchlingSteps {
                     mod.ModHelper.Config.SetSettingsValue("Reverse Boost Chance", FailChance(Skills.Jetpack) / 2);
                     mod.ModHelper.Config.SetSettingsValue("Scout Misfire Chance", FailChance(Skills.Scout) / 4);
                     mod.ModHelper.Config.SetSettingsValue("Chance of Tripping while Sprinting", movementFailChance * 2);
+                    mod.ModHelper.Config.SetSettingsValue("Emergency Boost Misfire Chance", 0);
                     mod.Configure(mod.ModHelper.Config);
                     break;
                 }
@@ -262,33 +404,44 @@ namespace HatchlingSteps {
         }
 
         enum Skills {
-            Walk = 0,
-            Jump,
-            Jetpack,
+            Walk = 0,//
+            Jump,//
+            Jetpack,//
             Scout,
-            Fly,
+            Fly,//
             Constitution,
             Speak,
             Read,
             Swim,
-            Cook,
+            Cook,//
             Repair,
             Stealth
         }
 
-
         [HarmonyPatch]
         public class MyPatchClass {
-            [HarmonyPrefix]
+            // Walk:
+            [HarmonyPrefix] // If walk is messed up, change walk speed
+            [HarmonyPatch(typeof(OWInput), nameof(OWInput.GetAxisValue))]
+            static bool OWInput_GetAxisValue_Prefix(ref Vector2 __result, IInputCommands command, InputMode mask = InputMode.All) {
+                if(command == InputLibrary.moveXZ && (mask & (InputMode.Character | InputMode.NomaiRemoteCam)) > 0) __result = OWInput.SharedInputManager.GetAxisValue(command, mask) * Instance.messVector + Instance.autoWalk;
+                else return true;
+                return false;
+            }
+
+            // Jump:
+            [HarmonyPrefix] // Check if jump is successful
             [HarmonyPatch(typeof(PlayerCharacterController), nameof(PlayerCharacterController.ApplyJump))]
             static void PlayerCharacterController_ApplyJump_Prefix(PlayerCharacterController __instance) {
                 if(__instance._jumpNextFixedUpdate) {
                     if(Instance.Learn(Skills.Jump)) {
                         switch(Random.Range(0, 3)) {
                         case 0:
-                            Instance.forced = true;
+                            Instance.ModHelper.Console.WriteLine("Jump: You mess!"); //TEST
+                            Instance.forced = (int)Skills.Jump;
                             break;
                         case 1:
+                            Instance.ModHelper.Console.WriteLine("Jump: You shit!"); //TEST
                             __instance._jumpNextFixedUpdate = false;
                             __instance._jumpChargeTime = 0f;
                             __instance._lastJumpTime = Time.time;
@@ -298,44 +451,111 @@ namespace HatchlingSteps {
                             __instance._jumpNextFixedUpdate = false;
                             __instance._jumpChargeTime = 0f;
                             __instance._lastJumpTime = Time.time;
+                            Instance.ModHelper.Console.WriteLine("Jump: You do nothing!"); //TEST
                             break;
                         }
                     }
                 }
             }
-
-            [HarmonyPrefix]
+            [HarmonyPrefix] // If jump is messed up, change jump speed and do not learn
             [HarmonyPatch(typeof(PlayerCharacterController), nameof(PlayerCharacterController.CalculateJumpSpeed))]
             static bool PlayerCharacterController_CalculateJumpSpeed_Prefix(PlayerCharacterController __instance, ref float __result) {
-                if(Instance.forced) {
+                if(Instance.forced == (int)Skills.Jump) {
                     __result = __instance._maxJumpSpeed * Random.Range(.1f, 1.8f);
-                    Instance.forced = false;
+                    Instance.forced = 0;
                     return false;
                 } else return true;
             }
 
-            [HarmonyPrefix]
-            [HarmonyPatch(typeof(OWInput), nameof(OWInput.GetAxisValue))]
-            static bool OWInput_GetAxisValue_Prefix(ref Vector2 __result, IInputCommands command, InputMode mask = InputMode.All) {
-                if(command == InputLibrary.moveXZ && (mask & (InputMode.Character | InputMode.NomaiRemoteCam)) > 0) __result = OWInput.SharedInputManager.GetAxisValue(command, mask) * Instance.messVector + Instance.autoWalk;
-                else return true;
-                return false;
+            // Jetpack:
+            [HarmonyPrefix] // Check if jetpack is successful
+            [HarmonyPatch(typeof(JetpackThrusterModel), nameof(JetpackThrusterModel.ActivateBoost))]
+            static bool JetpackThrusterModel_ActivateBoost_Prefix(JetpackThrusterModel __instance) {
+                if(Instance.forced == (int)Skills.Jetpack) Instance.forced = 0;
+                else if(__instance.IsBoosterReadyToFire() && Instance.Learn(Skills.Jetpack)) {
+                    switch(Random.Range(0, 3)) {
+                    case 0:
+                        Instance.ModHelper.Console.WriteLine("Jetpack: You mess!"); //TEST
+                        float realBoostGroundVelocity = __instance._boostGroundVelocity;
+                        __instance._boostGroundVelocity *= Random.Range(-.5f, 2.5f);
+                        Instance.ModHelper.Events.Unity.FireInNUpdates(() => { __instance._boostGroundVelocity = realBoostGroundVelocity; }, 10);
+                        return true;
+                    case 1:
+                        Instance.ModHelper.Console.WriteLine("Jetpack: You shit!"); //TEST
+                        Instance.DoShit(1 << (int)Skills.Walk | 1 << (int)Skills.Jump | 1 << (int)Skills.Scout | 1 << (int)Skills.Fly | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
+                        break;
+                    default:
+                        Instance.ModHelper.Console.WriteLine("Jetpack: You do nothing!"); //TEST
+                        break;
+                    }
+                    return false;
+                }
+                return true;
             }
 
-            [HarmonyPostfix]
-            [HarmonyPatch(typeof(Campfire), nameof(Campfire.StartRoasting))]
-            static void Campfire_StartRoasting_Postfix() {
+            // Fly:
+            [HarmonyPostfix] // When ship flight is messed up, add to movement
+            [HarmonyPatch(typeof(ShipThrusterController), nameof(ShipThrusterController.ReadTranslationalInput))]
+            static void ShipThrusterController_ReadTranslationalInput_Postfix(ref Vector3 __result) {
+                __result += Instance.autoShipThrust;
+            }
+            [HarmonyPostfix] // When ship flight is messed up, add to rotation
+            [HarmonyPatch(typeof(ShipThrusterController), nameof(ShipThrusterController.ReadRotationalInput))]
+            static void ShipThrusterController_ReadRotationalInput_Postfix(ref Vector3 __result) {
+                __result.x -= Instance.autoShipRotation.x;
+                if(__result.z == 0) __result.y += Instance.autoShipRotation.y;
+                else if(__result.z < 0) __result.z -= Instance.autoShipRotation.y;
+                else __result.z += Instance.autoShipRotation.y;
+            }
+            [HarmonyPostfix] // When jetpack flight is messed up, add to movement
+            [HarmonyPatch(typeof(JetpackThrusterController), nameof(JetpackThrusterController.ReadTranslationalInput))]
+            static void JetpackThrusterController_ReadTranslationalInput_Postfix(ref Vector3 __result) {
+                __result += Instance.autoThrust;
+            }
+            [HarmonyPostfix] // When jetpack flight is messed up, add to rotation
+            [HarmonyPatch(typeof(JetpackThrusterController), nameof(JetpackThrusterController.ReadRotationalInput))]
+            static void JetpackThrusterController_ReadRotationalInput_Postfix(ref Vector3 __result) {
+                __result.x -= Instance.autoRotation.x;
+                if(__result.z == 0) __result.y += Instance.autoRotation.y;
+                else if(__result.z < 0) __result.z -= Instance.autoRotation.y;
+                else __result.z += Instance.autoRotation.y;
+            }
+
+            // Cook:
+            [HarmonyPostfix] // When marshmallow is spawned, learn cook skill
+            [HarmonyPatch(typeof(Marshmallow), nameof(Marshmallow.SpawnMallow))]
+            static void Marshmallow_SpawnMallow_Postfix() {
                 Instance.Learn(Skills.Cook);
             }
-            [HarmonyPrefix]
-            [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.OnEatMarshmallow))]
-            static void PlayerResources_OnEatMarshmallow_Prefix(float toastedFraction) {
-                Instance.ModHelper.Console.WriteLine("Before pref:"+toastedFraction+" skill:" + Instance.skillLevel[(int)Skills.Cook]); //TEST
-                float noobModifier = 1 - Instance.skillLevel[(int)Skills.Cook] / 150f;
-                toastedFraction = (toastedFraction - 0.7f) * (1 + noobModifier) + 0.7f + Mathf.Max(noobModifier, 0) * (toastedFraction < 0.7f ? -0.5f : 0.3f);
-                Instance.ModHelper.Console.WriteLine("After pref:" + toastedFraction); //TEST
+            [HarmonyPrefix] // If cook is forced, skip ref to campfire
+            [HarmonyPatch(typeof(RoastingStickController), nameof(RoastingStickController.CalculateMaxStickExtension))]
+            static bool RoastingStickController_CalculateMaxStickExtension_Prefix(RoastingStickController __instance, ref float __result) {
+                try { if(__instance._campfire.transform != null) return true; } catch { }
+                __result = __instance._stickMaxZ;
+                return false;
             }
-            [HarmonyPostfix]
+            [HarmonyPrefix] // If cook is forced, skip ref to campfire
+            [HarmonyPatch(typeof(Marshmallow), nameof(Marshmallow.UpdateRoast))]
+            static bool Marshmallow_UpdateRoast_Prefix(Campfire campfire) {
+                try { if(campfire.transform != null) return true; } catch { }
+                return false;
+            }
+            [HarmonyPrefix] // If cook is forced, skip ref to campfire
+            [HarmonyPatch(typeof(Campfire), nameof(Campfire.StopRoasting))]
+            static bool Campfire_StopRoasting_Prefix(Campfire __instance) {
+                try { if(__instance.transform != null) return true; } catch { }
+                GlobalMessenger.FireEvent("ExitRoastingMode");
+                return false;
+            }
+            [HarmonyPrefix] // Change marshmallow toasting based on cook skill
+            [HarmonyPatch(typeof(Marshmallow), nameof(Marshmallow.Eat))]
+            static void Marshmallow_Eat_Prefix(ref float ____toastedFraction) {
+                Instance.ModHelper.Console.WriteLine("Before pref:"+____toastedFraction+" skill:" + Instance.skillLevel[(int)Skills.Cook]); //TEST
+                float noobModifier = 1 - Instance.skillLevel[(int)Skills.Cook] / 150f;
+                ____toastedFraction = (____toastedFraction - 0.7f) * (1 + noobModifier) + 0.7f + Mathf.Max(noobModifier, 0) * (____toastedFraction < 0.7f ? -0.5f : 0.3f);
+                Instance.ModHelper.Console.WriteLine("After pref:" + ____toastedFraction); //TEST
+            }
+            [HarmonyPostfix] // Apply damage for very badly cooked marshmallow
             [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.OnEatMarshmallow))]
             static void PlayerResources_OnEatMarshmallow_Postfix(float toastedFraction) {
                 Instance.ModHelper.Console.WriteLine("Before post:" + toastedFraction); //TEST
@@ -343,8 +563,9 @@ namespace HatchlingSteps {
                 if(toastedFraction < 0f) damage = -toastedFraction / 1.2f;
                 else if(toastedFraction > 1f) damage = (toastedFraction - 1f) / 0.6f;
                 else return;
-                Instance.ModHelper.Console.WriteLine("Damage:" + damage * 50f); //TEST
-                Locator.GetPlayerBody().GetComponent<PlayerResources>().ApplyInstantDamage(damage * 50f, InstantDamageType.Puncture);
+                damage *= 20f - Instance.skillLevel[(int)Skills.Constitution] / 12.5f;
+                Instance.ModHelper.Console.WriteLine("Damage:" + damage); //TEST
+                Locator.GetPlayerBody().GetComponent<PlayerResources>().ApplyInstantDamage(damage, InstantDamageType.Puncture);
             }
         }
     }
