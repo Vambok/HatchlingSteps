@@ -12,25 +12,51 @@ namespace HatchlingSteps {
         bool sceneLoaded = false;
 
         // Game objects:
+        PlayerResources playerResources;
         PlayerCharacterController playerController;
         ProbeLauncher probeLauncher;
+        ProbeLauncher shipProbeLauncher;
         DialogueBoxVer2 subtitles;
         Campfire fakeCampfire;
         ShipCockpitController shipCockpitController;
 
         // Data:
         const int nbSkills = 12;
-        int[] shitParams = new int[nbSkills];//TODO
         int[] skillLevel = new int[nbSkills];
         int increment = 2;
+        int forced = 0;
+        //(walk)
         Vector2 messVector = Vector2.one;
         Vector2 autoWalk = Vector2.zero;
-        int forced = 0;
+        //(speak)
         int shutUpToken = 0;
+        //(fly)
         Vector3 autoThrust = Vector3.zero;
         Vector2 autoRotation = Vector2.zero;
         Vector3 autoShipThrust = Vector3.zero;
         Vector2 autoShipRotation = Vector2.zero;
+        //(repair)
+        float repairSkillCooldown = 0;
+        //(stealth)
+        float stealthSkillCooldown = 0;
+        bool ghostEscape = false;
+
+        // how probable is it to randomly:   Walk     Jump    Jetpack   Scout    Fly  Constitution Speak     Read     Swim     Cook    Repair   Stealth   weight is 1/(i1 + skillLvl / i2)
+        readonly (int, int)[] shitParams = [(1, 50), (1, 50), (1, 50), (1, 50), (1, 50), (1, 50), (3, 100), (1, 50), (1, 50), (8, 50), (1, 50), (1, 50)];
+        enum Skills {
+            Walk = 0,//
+            Jump,//
+            Jetpack,//
+            Scout,//
+            Fly,//
+            Constitution,//
+            Speak,
+            Read,
+            Swim,
+            Cook,//
+            Repair,
+            Stealth//
+        }
 
         public void Awake() {
             Instance = this;
@@ -74,11 +100,15 @@ namespace HatchlingSteps {
                 if(saveData != null) skillLevel = System.Array.ConvertAll(saveData.id.Split(','), int.Parse);
                 ModHelper.Events.Unity.FireInNUpdates(() => {
                     playerController = Locator.GetPlayerController();
-                    probeLauncher = Locator.GetToolModeSwapper()._probeLauncher;
+                    playerResources = playerController._playerResources;
+                    probeLauncher = Locator.GetToolModeSwapper().GetProbeLauncher();
                     subtitles = GameObject.FindWithTag("DialogueGui").GetRequiredComponent<DialogueBoxVer2>();
                     fakeCampfire = new Campfire();
                     GlobalMessenger.AddListener("ExitRoastingMode", () => ModHelper.Events.Unity.FireInNUpdates(() => { if(forced == (int)Skills.Cook) forced = 0; }, 10));
                     shipCockpitController = Locator.GetShipTransform().Find("Module_Cockpit/Systems_Cockpit/ShipCockpitController").GetComponent<ShipCockpitController>();
+                    shipProbeLauncher = shipCockpitController.GetShipProbeLauncher();
+                    PlayerResources._maxHealth *= 0.5f + skillLevel[(int)Skills.Constitution] / 400f;
+                    playerResources._currentHealth = PlayerResources._maxHealth;
                     sceneLoaded = true;
                 }, 30);
                 ModHelper.Console.WriteLine("Loaded into solar system!", MessageType.Success);
@@ -254,15 +284,14 @@ namespace HatchlingSteps {
             if(!Locator.GetPlayerSuit().IsWearingSuit(true) || !playerController._playerResources.IsJetpackUsable())
                 shitMask &= ~(1 << (int)Skills.Jetpack);
             // Can you Scout? (Launch or retrieve probe)
+            ProbeLauncher currentProbeLauncher = probeLauncher;
             if((shitMask >>> (int)Skills.Scout & 0x1) > 0) {
                 bool shitOk = false;
                 if(probeLauncher.IsEquipped()) {
-                    if(probeLauncher.GetActiveProbe() == null) {
-                        if(probeLauncher.AllowLaunchMode()) shitOk = true;
-                        // else ModHelper.Console.WriteLine("Probe launcher not ready! You dummy");
-                    } else if(probeLauncher._allowRetrieval) {
-                        shitOk = true;
-                    } // else ModHelper.Console.WriteLine("Probe not ready to be retrieved! You dummy");
+                    if(probeLauncher.GetActiveProbe() == null || probeLauncher._allowRetrieval) shitOk = true;
+                } else if(shipProbeLauncher.IsEquipped()) {
+                    currentProbeLauncher = shipProbeLauncher;
+                    if(shipProbeLauncher.GetActiveProbe() == null || shipProbeLauncher._allowRetrieval) shitOk = true;
                 } // else ModHelper.Console.WriteLine("Equip probe launcher to fire! You dummy");
                 if(!shitOk) shitMask &= ~(1 << (int)Skills.Scout);
             }
@@ -282,7 +311,7 @@ namespace HatchlingSteps {
             float chosenShit = 0;
             float[] derpSums = new float[nbSkills];
             for(int i = 0; i < nbSkills; i++) {
-                chosenShit += (shitMask >>> i & 0x1) / (i == (int)Skills.Speak ? (3 + skillLevel[i] / 100f) : ((i == (int)Skills.Cook ? 8 : 1) + skillLevel[i] / 50f)); // Cook starts eight times less likely to do randomly
+                if((shitMask >>> i & 0x1) > 0) chosenShit += 1 / (shitParams[i].Item1 + skillLevel[i] / shitParams[i].Item2);
                 derpSums[i] = chosenShit;
             }
             chosenShit = Random.Range(0f, chosenShit);
@@ -301,21 +330,23 @@ namespace HatchlingSteps {
                     break;
                 case Skills.Jump:
                     ModHelper.Console.WriteLine("You jump!"); //TEST
+                    forced = (int)skill;
                     playerController._jumpNextFixedUpdate = true;
                     playerController._jumpChargeTime = 1f;
-                    forced = (int)Skills.Jump;
                     break;
                 case Skills.Jetpack:
                     ModHelper.Console.WriteLine("You boost jetpack!"); //TEST
+                    forced = (int)skill;
                     playerController._jetpackModel.ActivateBoost();
-                    forced = (int)Skills.Jetpack;
                     break;
                 case Skills.Scout:
                     ModHelper.Console.WriteLine("You scout!"); //TEST
-                    if(probeLauncher.GetActiveProbe() == null) probeLauncher.LaunchProbe();
-                    else {
-                        probeLauncher.RetrieveProbe(true, false);
-                        probeLauncher._allowRetrieval = false;
+                    if(currentProbeLauncher.GetActiveProbe() == null) {
+                        forced = (int)skill;
+                        currentProbeLauncher.LaunchProbe();
+                    } else {
+                        currentProbeLauncher.RetrieveProbe(true, false);
+                        currentProbeLauncher._allowRetrieval = false;
                     }
                     break;
                 case Skills.Fly:
@@ -337,7 +368,7 @@ namespace HatchlingSteps {
                     break;
                 case Skills.Cook:
                     ModHelper.Console.WriteLine("You cook!"); //TEST
-                    forced = (int)Skills.Cook;
+                    forced = (int)skill;
                     GlobalMessenger<Campfire>.FireEvent("EnterRoastingMode", fakeCampfire);
                     break;
                 default:
@@ -369,18 +400,27 @@ namespace HatchlingSteps {
             ModHelper.Events.Unity.FireInNUpdates(() => { if(localShutUpToken == shutUpToken) subtitles.SetVisible(false); }, Mathf.RoundToInt((text.Length + 40) / (Time.deltaTime * 20)));
         }
 
-        bool Learn(Skills skill) {
-            if(forced < 1) {
-                if(skill == Skills.Cook) skillLevel[(int)skill] += increment;
-                else if(skillLevel[(int)skill] < Random.Range(0, 201)) {
-                    skillLevel[(int)skill] += increment;
-                    ModHelper.Console.WriteLine($"\"{skill}\" skill level increased to {skillLevel[(int)skill]}!", MessageType.Success);
-                    PlayerData._currentGameSave.shipLogFactSaves["HatchlingSteps_currentSkill"] = new ShipLogFactSave(string.Join(",", skillLevel));
-                    if(skill == Skills.Walk || skill == Skills.Constitution || skill == Skills.Jetpack || skill == Skills.Scout) UpdateTripping();
-                    return true;
-                }
+        bool Learn(Skills skill, bool skillCheck = true) {
+            if(forced > 0) {
+                if(forced == (int)skill && skill != Skills.Jump) forced = 0;
+                return false;
             }
-            return false;
+            switch(skill) {
+            case Skills.Cook:
+                break;
+            case Skills.Constitution:
+                playerResources._currentHealth += playerResources.GetHealthFraction() * increment / 400f;
+                PlayerResources._maxHealth += increment / 400f;
+                break;
+            default:
+                if(skillCheck && Random.Range(0, 201) <= skillLevel[(int)skill]) return false;
+                break;
+            }
+            skillLevel[(int)skill] += increment;
+            ModHelper.Console.WriteLine($"\"{skill}\" skill level increased to {skillLevel[(int)skill]}!", MessageType.Success);
+            PlayerData._currentGameSave.shipLogFactSaves["HatchlingSteps_currentSkill"] = new ShipLogFactSave(string.Join(",", skillLevel));
+            if(skill == Skills.Walk || skill == Skills.Constitution || skill == Skills.Jetpack || skill == Skills.Scout) UpdateTripping();
+            return true;
         }
         void UpdateTripping() {
             foreach(IModBehaviour mod in ModHelper.Interaction.GetMods()) {
@@ -397,26 +437,12 @@ namespace HatchlingSteps {
                     break;
                 }
             }
-
             float FailChance(Skills skill, bool residual = false) {
                 return 1 - Mathf.Min(skillLevel[(int)skill] * 0.005f, 1) + (residual ? 0.04f - increment / 200f : 0);
             }
         }
 
-        enum Skills {
-            Walk = 0,//
-            Jump,//
-            Jetpack,//
-            Scout,
-            Fly,//
-            Constitution,
-            Speak,
-            Read,
-            Swim,
-            Cook,//
-            Repair,
-            Stealth
-        }
+        // PATCHES //
 
         [HarmonyPatch]
         public class MyPatchClass {
@@ -430,7 +456,7 @@ namespace HatchlingSteps {
             }
 
             // Jump:
-            [HarmonyPrefix] // Check if jump is successful
+            [HarmonyPrefix] // Check if jump is successful, if not mess up and learn
             [HarmonyPatch(typeof(PlayerCharacterController), nameof(PlayerCharacterController.ApplyJump))]
             static void PlayerCharacterController_ApplyJump_Prefix(PlayerCharacterController __instance) {
                 if(__instance._jumpNextFixedUpdate) {
@@ -457,7 +483,7 @@ namespace HatchlingSteps {
                     }
                 }
             }
-            [HarmonyPrefix] // If jump is messed up, change jump speed and do not learn
+            [HarmonyPrefix] // If jump is messed up, change jump speed (don't learn twice)
             [HarmonyPatch(typeof(PlayerCharacterController), nameof(PlayerCharacterController.CalculateJumpSpeed))]
             static bool PlayerCharacterController_CalculateJumpSpeed_Prefix(PlayerCharacterController __instance, ref float __result) {
                 if(Instance.forced == (int)Skills.Jump) {
@@ -468,7 +494,7 @@ namespace HatchlingSteps {
             }
 
             // Jetpack:
-            [HarmonyPrefix] // Check if jetpack is successful
+            [HarmonyPrefix] // Check if jetpack is successful, if not mess up boost and learn
             [HarmonyPatch(typeof(JetpackThrusterModel), nameof(JetpackThrusterModel.ActivateBoost))]
             static bool JetpackThrusterModel_ActivateBoost_Prefix(JetpackThrusterModel __instance) {
                 if(Instance.forced == (int)Skills.Jetpack) Instance.forced = 0;
@@ -489,6 +515,25 @@ namespace HatchlingSteps {
                         break;
                     }
                     return false;
+                }
+                return true;
+            }
+
+            // Scout:
+            [HarmonyPrefix] // Check if scout is successful, if not mess up and learn
+            [HarmonyPatch(typeof(ProbeLauncher), nameof(ProbeLauncher.LaunchProbe))]
+            static bool ProbeLauncher_LaunchProbe_Prefix(ProbeLauncher __instance) {
+                if(Instance.Learn(Skills.Scout)) {
+                    switch(Random.Range(0, 2)) {
+                    case 0:
+                        Instance.ModHelper.Console.WriteLine("Scout: You shit!"); //TEST
+                        Instance.DoShit(1 << (int)Skills.Walk | 1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
+                        return false;
+                    default:
+                        Instance.ModHelper.Console.WriteLine("Scout: You do nothing!"); //TEST
+                        Instance.ModHelper.Events.Unity.FireInNUpdates(() => { __instance.RetrieveProbe(false, true); }, 2);
+                        break;
+                    }
                 }
                 return true;
             }
@@ -521,8 +566,15 @@ namespace HatchlingSteps {
                 else __result.z += Instance.autoRotation.y;
             }
 
+            // Constitution:
+            [HarmonyPostfix] // Increase constitution skill when player takes damage
+            [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.ApplyInstantDamage))]
+            static void PlayerResources_ApplyInstantDamage_Postfix(ref bool __result) {
+                if(__result) Instance.Learn(Skills.Constitution);
+            }
+
             // Cook:
-            [HarmonyPostfix] // When marshmallow is spawned, learn cook skill
+            [HarmonyPostfix] // When marshmallow is spawned, increase cook skill
             [HarmonyPatch(typeof(Marshmallow), nameof(Marshmallow.SpawnMallow))]
             static void Marshmallow_SpawnMallow_Postfix() {
                 Instance.Learn(Skills.Cook);
@@ -557,7 +609,7 @@ namespace HatchlingSteps {
             }
             [HarmonyPostfix] // Apply damage for very badly cooked marshmallow
             [HarmonyPatch(typeof(PlayerResources), nameof(PlayerResources.OnEatMarshmallow))]
-            static void PlayerResources_OnEatMarshmallow_Postfix(float toastedFraction) {
+            static void PlayerResources_OnEatMarshmallow_Postfix(PlayerResources __instance, float toastedFraction) {
                 Instance.ModHelper.Console.WriteLine("Before post:" + toastedFraction); //TEST
                 float damage;
                 if(toastedFraction < 0f) damage = -toastedFraction / 1.2f;
@@ -565,7 +617,81 @@ namespace HatchlingSteps {
                 else return;
                 damage *= 20f - Instance.skillLevel[(int)Skills.Constitution] / 12.5f;
                 Instance.ModHelper.Console.WriteLine("Damage:" + damage); //TEST
-                Locator.GetPlayerBody().GetComponent<PlayerResources>().ApplyInstantDamage(damage, InstantDamageType.Puncture);
+                __instance.ApplyInstantDamage(damage, InstantDamageType.Puncture);
+            }
+
+            //Repair: //TODO
+            [HarmonyPrefix] // Change repair speed and eventually messes up depending on repair skill, and learn
+            [HarmonyPatch(typeof(RepairReceiver), nameof(RepairReceiver.RepairTick))]
+            static void RepairReceiver_RepairTick_Prefix(RepairReceiver __instance, ref ShipComponent ____targetComponent, ref ShipHull ____targetHull, ref SatelliteNode ____targetSatNode) {
+                if(Time.time > Instance.repairSkillCooldown) {
+                    switch(__instance._type) {
+                    case RepairReceiver.Type.ShipComponent:
+                        ____targetComponent._repairTime = 3f;//add skill dependent modifier (can be negative for un-repair)
+                        break;
+                    case RepairReceiver.Type.ShipHull:
+                        ____targetHull._repairTime = 5f;
+                        break;
+                    case RepairReceiver.Type.SatelliteNode:
+                        ____targetSatNode._repairTime = 3f;
+                        break;
+                    }
+                    Instance.repairSkillCooldown = Time.time + 2f;
+                }
+            }
+
+            //Stealth:
+            [HarmonyPostfix] // Change noise radius based on stealth skill (impacts anglerfish investigation distance)
+            [HarmonyPatch(typeof(NoiseMaker), nameof(NoiseMaker.GetNoiseRadius))]
+            static void NoiseMaker_GetNoiseRadius_Postfix(ref float __result, ref OWRigidbody ____attachedBody) {
+                if(____attachedBody.CompareTag("Player") || ____attachedBody.CompareTag("Ship")) __result /= (0.3f + Instance.skillLevel[(int)Skills.Stealth] / 60f);
+            }
+            [HarmonyPrefix] // Change player pursue distance based on stealth skill (impacts anglerfish chase distance)
+            [HarmonyPatch(typeof(AnglerfishController), nameof(AnglerfishController.OnClosestAudibleNoise))]
+            static bool AnglerfishController_OnClosestAudibleNoise_Prefix(AnglerfishController __instance, NoiseMaker noiseMaker, ref OWRigidbody ____targetBody, ref Vector3 ____localDisturbancePos, ref float ____escapeDistance) {
+                if(__instance._currentState == AnglerfishController.AnglerState.Consuming || (!noiseMaker.GetAttachedBody().CompareTag("Player") && !noiseMaker.GetAttachedBody().CompareTag("Ship")))
+                    return true;
+                float pursueDistance = 0.3f + Instance.skillLevel[(int)Skills.Stealth] / 60f;
+                ____escapeDistance = 500f / pursueDistance;
+                pursueDistance = __instance._pursueDistance / pursueDistance;
+                if((noiseMaker.GetNoiseOrigin() - __instance.transform.position).sqrMagnitude < pursueDistance * pursueDistance) {
+                    if(____targetBody != noiseMaker.GetAttachedBody()) {
+                        ____targetBody = noiseMaker.GetAttachedBody();
+                        if(__instance._currentState != AnglerfishController.AnglerState.Chasing)
+                            __instance.ChangeState(AnglerfishController.AnglerState.Chasing);
+                    }
+                } else if(__instance._currentState == AnglerfishController.AnglerState.Lurking || __instance._currentState == AnglerfishController.AnglerState.Investigating) {
+                    ____localDisturbancePos = __instance._brambleBody.transform.InverseTransformPoint(noiseMaker.GetNoiseOrigin());
+                    if(__instance._currentState != AnglerfishController.AnglerState.Investigating)
+                        __instance.ChangeState(AnglerfishController.AnglerState.Investigating);
+                }
+                return false;
+            }
+            [HarmonyPrefix] // Increase stealth skill when dodging anglerfish
+            [HarmonyPatch(typeof(AnglerfishController), nameof(AnglerfishController.ChangeState))]
+            static void AnglerfishController_ChangeState_Prefix(AnglerfishController __instance, AnglerfishController.AnglerState newState) {
+                if(__instance._currentState != newState && newState != AnglerfishController.AnglerState.Consuming && Time.time > Instance.stealthSkillCooldown) {
+                    Instance.Learn(Skills.Stealth, false);
+                    Instance.stealthSkillCooldown = Time.time + 2f;
+                }
+            }
+            [HarmonyPostfix] // Change player visibility risk based on stealth skill (impacts inhabitant's ability to see player), if seen learn stealth
+            [HarmonyWrapSafe]//<- Should hopefully prevent compatibility problems when DLC is not installed
+            [HarmonyPatch(typeof(GhostSensors), nameof(GhostSensors.FixedUpdate_Sensors))]
+            static void GhostSensors_FixedUpdate_Sensors_Postfix(ref GhostData ____data) {
+                if(____data.sensor.isPlayerVisible || ____data.sensor.isPlayerHeldLanternVisible) {
+                    if(Time.time > Instance.stealthSkillCooldown) {
+                        if(Instance.Learn(Skills.Stealth)) {
+                            Instance.ghostEscape = false;
+                            Instance.stealthSkillCooldown = Time.time + 0.75f + 2.25f / (Instance.increment + 1); // 3 1.875 1.5 1.2 1
+                        } else {
+                            Instance.ghostEscape = true;
+                            Instance.stealthSkillCooldown = Time.time + 1f + Instance.increment / 4f; // 1 1.25 1.5 2 3
+                        }
+                    }
+                    ____data.sensor.isPlayerVisible &= !Instance.ghostEscape;
+                    ____data.sensor.isPlayerHeldLanternVisible &= !Instance.ghostEscape;
+                }
             }
         }
     }
