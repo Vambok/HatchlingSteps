@@ -37,6 +37,7 @@ namespace HatchlingSteps {
         Vector2 autoShipRotation = Vector2.zero;
         //(repair)
         float repairSkillCooldown = 0;
+        bool canRepair = true;
         //(stealth)
         float stealthSkillCooldown = 0;
         bool ghostEscape = false;
@@ -620,24 +621,45 @@ namespace HatchlingSteps {
                 __instance.ApplyInstantDamage(damage, InstantDamageType.Puncture);
             }
 
-            //Repair: //TODO
-            [HarmonyPrefix] // Change repair speed and eventually messes up depending on repair skill, and learn
+            //Repair:
+            [HarmonyPrefix] // Change repair speed depending on repair skill, and learn
             [HarmonyPatch(typeof(RepairReceiver), nameof(RepairReceiver.RepairTick))]
-            static void RepairReceiver_RepairTick_Prefix(RepairReceiver __instance, ref ShipComponent ____targetComponent, ref ShipHull ____targetHull, ref SatelliteNode ____targetSatNode) {
+            static bool RepairReceiver_RepairTick_Prefix(RepairReceiver __instance, ref ShipComponent ____targetComponent, ref ShipHull ____targetHull, ref SatelliteNode ____targetSatNode) {
                 if(Time.time > Instance.repairSkillCooldown) {
-                    switch(__instance._type) {
-                    case RepairReceiver.Type.ShipComponent:
-                        ____targetComponent._repairTime = 3f;//add skill dependent modifier (can be negative for un-repair)
-                        break;
+                    Instance.repairSkillCooldown = Time.time + 2f;
+                    float repairTimeModifier = 1f;
+                    if(Instance.Learn(Skills.Repair)) {
+                        switch(Random.Range(0, 3)) {
+                        case 0:
+                            repairTimeModifier = Random.Range(-1f, 1f);
+                            if(repairTimeModifier < 0.1f && repairTimeModifier > -0.1f) repairTimeModifier = 5 * repairTimeModifier - 1.5f;
+                            Instance.ModHelper.Console.WriteLine("Repair: You mess! /" + repairTimeModifier); //TEST
+                            break;
+                        case 1:
+                            Instance.ModHelper.Console.WriteLine("Repair: You shit!"); //TEST
+                            Instance.DoShit(1 << (int)Skills.Walk | 1 << (int)Skills.Jump | 1 << (int)Skills.Jetpack | 1 << (int)Skills.Scout | 1 << (int)Skills.Speak | 1 << (int)Skills.Cook);
+                            Instance.canRepair = false;
+                            return false;
+                        default:
+                            Instance.ModHelper.Console.WriteLine("Repair: You do nothing!"); //TEST
+                            Instance.canRepair = false;
+                            return false;
+                        }
+                    }
+                    Instance.canRepair = true;
+                    switch (__instance._type) {
                     case RepairReceiver.Type.ShipHull:
-                        ____targetHull._repairTime = 5f;
+                        ____targetHull._repairTime = 5f / repairTimeModifier;
                         break;
                     case RepairReceiver.Type.SatelliteNode:
-                        ____targetSatNode._repairTime = 3f;
+                        ____targetSatNode._repairTime = 3f / repairTimeModifier;
+                        break;
+                    default:
+                        ____targetComponent._repairTime = 3f / repairTimeModifier;
                         break;
                     }
-                    Instance.repairSkillCooldown = Time.time + 2f;
                 }
+                return Instance.canRepair;
             }
 
             //Stealth:
